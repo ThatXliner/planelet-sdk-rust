@@ -38,15 +38,15 @@ impl SuperPlaneClient {
             base_url: options.base_url.trim_end_matches('/').to_string(),
             integration_id: options.integration_id,
             token: options.token,
-            client: Client::new(),
+            client: Client::builder()
+                .use_rustls_tls()
+                .build()
+                .expect("failed to create HTTP client"),
         }
     }
 
     /// Emit a direct plugin event into SuperPlane.
-    pub async fn emit_event(
-        &self,
-        event: &DirectPluginEvent,
-    ) -> Result<(), SuperPlaneClientError> {
+    pub async fn emit_event(&self, event: &DirectPluginEvent) -> Result<(), SuperPlaneClientError> {
         let url = format!(
             "{}/api/v1/integrations/{}/events",
             self.base_url, self.integration_id
@@ -61,13 +61,15 @@ impl SuperPlaneClient {
             req = req.header("authorization", format!("Bearer {}", token));
         }
 
-        let response = req.json(event).send().await.map_err(|e| {
-            SuperPlaneClientError {
+        let response = req
+            .json(event)
+            .send()
+            .await
+            .map_err(|e| SuperPlaneClientError {
                 message: format!("Request failed: {}", e),
                 status: None,
                 response_body: None,
-            }
-        })?;
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -80,5 +82,52 @@ impl SuperPlaneClient {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    #[tokio::test]
+    #[ignore = "requires public TLS test hosts"]
+    async fn patched_verifier_survives_native_tls_feature_unification() {
+        let sdk = super::SuperPlaneClient::new(super::SuperPlaneClientOptions {
+            base_url: "https://example.com".into(),
+            integration_id: String::new(),
+            token: None,
+        });
+        for host in [
+            "dv-g3b-emudhra.we-have-a-problem.com",
+            "dv-g3b-aaa-emudhra.we-have-a-problem.com",
+        ] {
+            let mut rejected = false;
+            for attempt in 1..=5 {
+                let error = sdk
+                    .client
+                    .get(format!("https://{host}/"))
+                    .timeout(std::time::Duration::from_secs(20))
+                    .send()
+                    .await
+                    .expect_err("compromised chain accepted");
+                let detail = format!("{error:?}");
+                println!("{host} attempt {attempt}: {detail}");
+                if detail.contains("CertDistrusted") {
+                    rejected = true;
+                    break;
+                }
+            }
+            assert!(
+                rejected,
+                "no Rustls certificate rejection; network errors are inconclusive"
+            );
+        }
+        let response = sdk
+            .client
+            .get("https://example.com/")
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        println!("example.com: {}", response.status());
     }
 }
