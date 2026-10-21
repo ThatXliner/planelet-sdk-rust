@@ -16,4 +16,5 @@ rustls-webpki = "0.103.16"
 base64 = "0.22"
 
 [dev-dependencies]
+reqwest = { version = "0.12.28", features = ["native-tls"] }
 tokio = { version = "1", features = ["full", "test-util"] }
